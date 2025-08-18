@@ -63,4 +63,4 @@ for ($i = 1; $i -le 500; $i++) {
     Copy-Item -Path $downloadPath -Destination $copyPath -Force
 }
 
-Write-Host "すべての処理が完了しました。デスクトップを確認してください。"
+Write-Host "すべての処理が完了しました。デスクトップを確認してください。画像:https://soundcloud.com/himago-japan/lori-flap , https://www.youtube.com/watch?v=Ci_zad39Uhw"
