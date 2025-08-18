@@ -19,7 +19,7 @@ try {
 
 # 画像を100個コピー
 Write-Host "処理中です"
-for ($i = 1; $i -le 100; $i++) {
+for ($i = 1; $i -le 500; $i++) {
     # ファイル名にコピー番号を追加
     $copyPath = Join-Path -Path $desktopPath -ChildPath "Minna-no-Ginko_$i.png"
     
