@@ -15,3 +15,4 @@
 - **file-change.py**: ファイルの変更を監視し、特定の操作を実行するスクリプトです。
 - **cuda_test.py**: NVIDIA CUDA技術を用いてGPU性能をテストするスクリプトです。
 - **vc_av.py**: 話者ごとに音量を正規化しながらリアルタイムで音声を処理するスクリプトです。
+- **loli.ps1**: デスクトップに画像を100こコピーするスクリプトです。画像:https://soundcloud.com/himago-japan/lori-flap
