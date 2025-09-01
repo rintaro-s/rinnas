@@ -1,0 +1,19 @@
+{
+    "manifest_version": 3,
+    "name": "YouTube History Logger",
+    "version": "1.0",
+    "description": "Logs watched YouTube videos to a specified server.",
+    "content_scripts": [
+        {
+            "matches": [
+                "https://www.youtube.com/watch*"
+            ],
+            "js": [
+                "content.js"
+            ]
+        }
+    ],
+    "host_permissions": [
+        "https://.com/"
+    ]
+}
