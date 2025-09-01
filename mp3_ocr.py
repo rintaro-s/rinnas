@@ -16,12 +16,12 @@ def transcribe_audio_with_whisper(wav_file, model_name="base"):
     print(f"Whisperモデル '{model_name}' をロード中...")
     model = whisper.load_model(model_name)  # モデルをロード（例: "base", "small", "medium", "large"）
     print("文字起こしを実行中...")
-    result = model.transcribe(wav_file, language="en")  # 日本語を指定
+    result = model.transcribe(wav_file, language="ja")  # 日本語を指定
     return result["text"]
 
 if __name__ == "__main__":
     # 入力MP3ファイルと出力WAVファイルのパス
-    mp3_file = "converted.mp3"  # 入力するMP3ファイル
+    mp3_file = "mirai.mp3"  # 入力するMP3ファイル
     wav_file = "output.wav"  # 一時的に作成するWAVファイル
 
     # MP3をWAVに変換
@@ -30,7 +30,7 @@ if __name__ == "__main__":
 
     # Whisperを使用して音声を文字起こし
     print("Whisperを使用して文字起こしを実行中...")
-    transcription = transcribe_audio_with_whisper(wav_file, model_name="base")
+    transcription = transcribe_audio_with_whisper(wav_file, model_name="large")  # モデル名を指定（例: "base", "small", "medium", "large"）
 
     # 結果を表示
     print("文字起こし結果:")
