@@ -1307,7 +1307,6 @@ class YuriTube:
             slider = ctk.CTkSlider(freq_frame, from_=-12, to=12, number_of_steps=24)
             slider.set(0)
             slider.pack(side="left", fill="x", expand=True, padx=5)
-    
     def lyrics_display(self):
         """20. 歌詞表示"""
         if not self.current_video:
