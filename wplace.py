@@ -30,8 +30,6 @@ def create_transparent_window(image_path):
     # これだけだとマウス操作は透過しない
     root.attributes('-alpha', 0.6)
 
-    # ウィンドウのスタイルを取得
-    # これがないとWindows APIで透過設定ができない
     hwnd = user32.GetParent(root.winfo_id())
 
     # ウィンドウに透過クリックのスタイルを設定
