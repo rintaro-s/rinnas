@@ -201,38 +201,88 @@ def get_status():
 # (add_song, control, queue management, etc. - ほぼ変更なし、微修正のみ)
 @app.route('/api/add', methods=['POST'])
 def add_song():
-    # ... (変更なし)
-    if not bot_state.get("current_vc"): return jsonify({"error": "Bot is not in a voice channel"}), 400
-    query = request.json.get('query');
-    if not query: return jsonify({"error": "Query is missing"}), 400
-    
-    ydl_opts = {'format': 'bestaudio/best', 'noplaylist': False, 'quiet': True, 'default_search': 'auto',
-                'extract_flat': 'in_playlist', 'logger': YTDLLogger()}
+    # Bot が VC に入っていない場合は拒否
+    if not bot_state.get("current_vc"):
+        return jsonify({"error": "Bot is not in a voice channel"}), 400
+
+    data = request.json or {}
+    query = data.get('query')
+    if not query:
+        return jsonify({"error": "Query is missing"}), 400
+
+    # オプション: プレイリストから何件追加するか、どの位置から追加するか
+    try:
+        max_items = int(data.get('max_items', 10))
+    except Exception:
+        max_items = 10
+    try:
+        start_index = int(data.get('start_index', 0))
+    except Exception:
+        start_index = 0
+
+    # 安全側の制限
+    if max_items < 1:
+        max_items = 1
+    if max_items > 100:
+        max_items = 100
+    if start_index < 0:
+        start_index = 0
+
+    ydl_opts = {
+        'format': 'bestaudio/best',
+        'noplaylist': False,
+        'quiet': True,
+        'default_search': 'auto',
+        # プレイリストはフラットに取得して重い抽出処理を避ける
+        'extract_flat': 'in_playlist',
+        'logger': YTDLLogger()
+    }
+
     added_items = []
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(query, download=False)
-            entries = info.get('entries', [info])
-            for entry in entries:
-                if not entry: continue
-                # YouTubeのvideo_idを正規表現で取得
-                video_id_match = re.search(r'(?:v=|\/embed\/|\/watch\?v=|youtu\.be\/)([\w-]{11})', entry.get('url', ''))
+            # entries があればプレイリスト
+            entries = info.get('entries') or [info]
+
+            # スライスの開始・終了を計算
+            if isinstance(entries, list):
+                sliced = entries[start_index:start_index + max_items]
+            else:
+                sliced = [entries]
+
+            for entry in sliced:
+                if not entry:
+                    continue
+                # 可能なら video_id を抽出
+                video_id_match = None
+                url_field = entry.get('url') or entry.get('webpage_url') or ''
+                m = re.search(r'(?:v=|\/embed\/|\/watch\?v=|youtu\.be\/)([\w-]{11})', url_field)
+                if m:
+                    video_id_match = m.group(1)
                 song_info = {
-                    'title': entry.get('title', '不明なタイトル'), 'thumbnail': entry.get('thumbnail'),
-                    'webpage_url': entry.get('webpage_url') or entry.get('url'), 'uploader': entry.get('uploader', '不明'),
-                    'duration': entry.get('duration', 0), 'video_id': video_id_match.group(1) if video_id_match else None
+                    'title': entry.get('title', '不明なタイトル'),
+                    'thumbnail': entry.get('thumbnail'),
+                    'webpage_url': entry.get('webpage_url') or entry.get('url') or url_field,
+                    'uploader': entry.get('uploader', '不明'),
+                    'duration': entry.get('duration', 0),
+                    'video_id': video_id_match
                 }
-                bot_state["song_queue"].append(song_info); added_items.append(song_info)
-        
-        vc = bot_state["current_vc"]
-        if vc and not vc.is_playing() and not bot_state["is_paused"]:
+                bot_state["song_queue"].append(song_info)
+                added_items.append(song_info)
+
+        # 再生トリガ
+        vc = bot_state.get("current_vc")
+        if vc and not vc.is_playing() and not bot_state.get("is_paused", False):
             run_in_bot_loop(asyncio.to_thread(play_next))
-        else: # 再生中でも次の曲のプリダウンロードをトリガー
+        else:
+            # 再生中でも次曲プリダウンロード
             pre_download_next_song()
-        
+
         return jsonify({"message": f"{len(added_items)} 曲を追加しました。", "added_songs": [s['title'] for s in added_items]})
     except Exception as e:
-        print(f"Add song error: {e}"); return jsonify({"error": "曲の追加に失敗しました。", "detail": str(e)}), 500
+        print(f"Add song error: {e}")
+        return jsonify({"error": "曲の追加に失敗しました。", "detail": str(e)}), 500
 
 @app.route('/api/soundboard/play', methods=['POST'])
 def play_sound():
