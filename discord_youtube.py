@@ -23,7 +23,7 @@ BOT_PREFIX = "m!"
 UPLOAD_FOLDER = 'sounds'
 AUDIO_CACHE_DIR = 'audio_cache' # ダウンロードした曲の保存場所
 ALLOWED_EXTENSIONS = {'mp3', 'wav', 'ogg'}
-FLASK_PORT = 5001
+FLASK_PORT = 8001
 CACHE_MAX_AGE_DAYS = 7 # キャッシュファイルの最大保存日数
 # ----------------
 
@@ -48,6 +48,21 @@ bot_state = {
     "play_start_time": 0.0, "paused_time": 0.0, "is_paused": False,
     "pre_downloading_ids": set() # 先行ダウンロード中のIDを管理
 }
+
+# Lock to protect bot_state mutations across threads
+bot_state_lock = threading.Lock()
+
+# Helper to schedule play_next safely on the bot event loop in a background thread
+def schedule_play_next():
+    try:
+        # Run play_next in a background thread and schedule it from the event loop
+        run_in_bot_loop(asyncio.to_thread(play_next))
+    except Exception:
+        try:
+            # fallback: call_soon_threadsafe to create a task that runs play_next in thread
+            bot.loop.call_soon_threadsafe(lambda: asyncio.create_task(asyncio.to_thread(play_next)))
+        except Exception as e:
+            print(f"Failed to schedule play_next: {e}")
 
 # Discord Botの準備
 intents = discord.Intents.default(); intents.guilds = True; intents.voice_states = True; intents.message_content = True
@@ -92,8 +107,10 @@ def download_song(song_info):
     if os.path.exists(cached_filepath): return cached_filepath
     
     # 二重ダウンロード防止
-    if video_id in bot_state["pre_downloading_ids"]: return None
-    bot_state["pre_downloading_ids"].add(video_id)
+    with bot_state_lock:
+        if video_id in bot_state["pre_downloading_ids"]:
+            return None
+        bot_state["pre_downloading_ids"].add(video_id)
     
     try:
         print(f"Downloading: {song_info['title']}")
@@ -109,52 +126,102 @@ def download_song(song_info):
         print(f"Download failed for {song_info['title']}: {e}")
         return None
     finally:
-        bot_state["pre_downloading_ids"].discard(video_id)
+        with bot_state_lock:
+            bot_state["pre_downloading_ids"].discard(video_id)
 
 def pre_download_next_song():
     """キューの次の曲を先行ダウンロードする"""
-    if bot_state["song_queue"]:
+    with bot_state_lock:
+        if not bot_state["song_queue"]:
+            return
         next_song = bot_state["song_queue"][0]
-        threading.Thread(target=download_song, args=(next_song,)).start()
+    # run in background thread so it doesn't block
+    threading.Thread(target=download_song, args=(next_song,), daemon=True).start()
 
 # --- Player Logic ---
 def play_next():
-    vc = bot_state.get("current_vc")
-    if not vc or not vc.is_connected() or bot_state["is_playing_sfx"]:
-        bot_state["now_playing"] = None; return
+    # This function is intended to run in a background thread (use schedule_play_next to invoke)
+    try:
+        with bot_state_lock:
+            vc = bot_state.get("current_vc")
+            is_playing_sfx = bot_state.get("is_playing_sfx", False)
+        if not vc or not vc.is_connected() or is_playing_sfx:
+            with bot_state_lock:
+                bot_state["now_playing"] = None
+            return
 
-    source_info = None
-    if bot_state["loop_mode"] == "song" and bot_state["last_played_song"]: source_info = bot_state["last_played_song"].copy()
-    elif bot_state["song_queue"]:
-        source_info = bot_state["song_queue"].pop(0)
-        if bot_state["loop_mode"] == "queue" and bot_state["last_played_song"]: bot_state["song_queue"].append(bot_state["last_played_song"])
-    
-    if not source_info: bot_state["now_playing"] = None; bot_state["last_played_song"] = None; return
+        # choose next source_info under lock to avoid races
+        with bot_state_lock:
+            source_info = None
+            if bot_state["loop_mode"] == "song" and bot_state.get("last_played_song"):
+                source_info = bot_state["last_played_song"].copy()
+            elif bot_state["song_queue"]:
+                source_info = bot_state["song_queue"].pop(0)
+                if bot_state["loop_mode"] == "queue" and bot_state.get("last_played_song"):
+                    bot_state["song_queue"].append(bot_state["last_played_song"].copy())
 
-    bot_state["now_playing"] = source_info; bot_state["last_played_song"] = source_info
-    
-    source_info['status'] = 'downloading'
-    play_path = download_song(source_info)
-    source_info.pop('status', None)
+            if not source_info:
+                bot_state["now_playing"] = None; bot_state["last_played_song"] = None
+                return
+            # mark status (not holding lock during blocking ops)
+            bot_state["now_playing"] = source_info
+            bot_state["last_played_song"] = source_info
 
-    if not play_path: play_next(); return
+        # Download the file (blocking) in this background thread
+        source_info['status'] = 'downloading'
+        play_path = download_song(source_info)
+        source_info.pop('status', None)
 
-    resume_offset = source_info.get('resume_offset', 0.0)
-    ffmpeg_options = get_ffmpeg_options(bot_state["current_eq"], start_offset=resume_offset)
-    source = discord.PCMVolumeTransformer(discord.FFmpegPCMAudio(play_path, **ffmpeg_options), volume=bot_state["volume"])
+        if not play_path:
+            # If download failed, try to schedule next
+            schedule_play_next()
+            return
 
-    def after_playing(error):
-        if error: print(f'Player error: {error}')
-        if not bot_state.get("stop_requested", False): play_next()
-        bot_state["stop_requested"] = False
+        resume_offset = source_info.get('resume_offset', 0.0)
+        ffmpeg_options = get_ffmpeg_options(bot_state.get("current_eq", "none"), start_offset=resume_offset)
 
-    vc.play(source, after=after_playing)
-    bot_state["play_start_time"] = time.time() - resume_offset
-    bot_state["is_paused"] = False
-    print(f"Now playing: {source_info['title']}")
-    
-    # 次の曲を先行ダウンロード
-    pre_download_next_song()
+        # Now schedule actual playback on the bot event loop
+        async def _do_play():
+            try:
+                vc_local = bot_state.get("current_vc")
+                if not vc_local or not vc_local.is_connected():
+                    schedule_play_next(); return
+
+                source = discord.PCMVolumeTransformer(discord.FFmpegPCMAudio(play_path, **ffmpeg_options), volume=bot_state.get("volume", 0.5))
+
+                def after_playing(error):
+                    if error: print(f'Player error: {error}')
+                    # schedule next in background thread
+                    if not bot_state.get("stop_requested", False):
+                        schedule_play_next()
+                    bot_state["stop_requested"] = False
+
+                vc_local.play(source, after=after_playing)
+                with bot_state_lock:
+                    bot_state["play_start_time"] = time.time() - resume_offset
+                    bot_state["is_paused"] = False
+                print(f"Now playing: {source_info['title']}")
+
+                # 次の曲を先行ダウンロード
+                pre_download_next_song()
+            except Exception as e:
+                print(f"_do_play error: {e}")
+                schedule_play_next()
+
+        # schedule the coroutine on the bot loop
+        try:
+            run_in_bot_loop(_do_play())
+        except Exception:
+            try:
+                bot.loop.call_soon_threadsafe(lambda: asyncio.create_task(_do_play()))
+            except Exception as e:
+                print(f"Failed to schedule _do_play: {e}")
+    except Exception as e:
+        print(f"play_next top-level error: {e}")
+        try:
+            schedule_play_next()
+        except Exception:
+            pass
 
 # --- Bot Events & Commands ---
 @bot.event
@@ -210,6 +277,9 @@ def add_song():
     if not query:
         return jsonify({"error": "Query is missing"}), 400
 
+    # オプション: プレイリストの自動追加を許可するか
+    allow_playlist = bool(data.get('allow_playlist', False))
+
     # オプション: プレイリストから何件追加するか、どの位置から追加するか
     try:
         max_items = int(data.get('max_items', 10))
@@ -228,22 +298,46 @@ def add_song():
     if start_index < 0:
         start_index = 0
 
+    # yt-dlp オプション: プレイリスト処理は allow_playlist に依存
     ydl_opts = {
         'format': 'bestaudio/best',
-        'noplaylist': False,
+        'noplaylist': not allow_playlist,
         'quiet': True,
         'default_search': 'auto',
-        # プレイリストはフラットに取得して重い抽出処理を避ける
-        'extract_flat': 'in_playlist',
         'logger': YTDLLogger()
     }
 
     added_items = []
+    errors = []
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(query, download=False)
-            # entries があればプレイリスト
-            entries = info.get('entries') or [info]
+
+            # entries があればプレイリストまたは検索結果のリスト
+            raw_entries = info.get('entries') if isinstance(info, dict) else None
+            if raw_entries:
+                # プレイリストが返ってきた
+                if allow_playlist:
+                    entries = list(raw_entries)
+                else:
+                    # プレイリスト自動追加がOFFの場合、最初の有効な動画のみ選ぶ
+                    entries = []
+                    for e in raw_entries:
+                        if not e:
+                            continue
+                        vid = e.get('id') or e.get('url') or e.get('webpage_url')
+                        if vid:
+                            # 簡易的に webpage_url がなければ構築
+                            if not e.get('webpage_url') and e.get('id'):
+                                e['webpage_url'] = f'https://www.youtube.com/watch?v={e.get("id")}'
+
+                            entries.append(e)
+                            break
+                    if not entries:
+                        return jsonify({"error": "プレイリスト内に有効な動画が見つかりませんでした。プレイリスト自動追加を ON にして再試行してください。"}), 400
+            else:
+                # 単体情報または検索結果1件
+                entries = [info] if info else []
 
             # スライスの開始・終了を計算
             if isinstance(entries, list):
@@ -254,16 +348,30 @@ def add_song():
             for entry in sliced:
                 if not entry:
                     continue
+                # ensure we have webpage_url or construct it from id
+                webpage = entry.get('webpage_url') or entry.get('url')
+                if not webpage and entry.get('id'):
+                    webpage = f'https://www.youtube.com/watch?v={entry.get("id")}'
+                    entry['webpage_url'] = webpage
+
                 # 可能なら video_id を抽出
                 video_id_match = None
-                url_field = entry.get('url') or entry.get('webpage_url') or ''
+                url_field = webpage or ''
                 m = re.search(r'(?:v=|\/embed\/|\/watch\?v=|youtu\.be\/)([\w-]{11})', url_field)
                 if m:
                     video_id_match = m.group(1)
+                elif entry.get('id') and isinstance(entry.get('id'), str) and len(entry.get('id')) == 11:
+                    video_id_match = entry.get('id')
+
+                if not video_id_match:
+                    # スキップして理由を記録
+                    errors.append(f"スキップ: タイトル='{entry.get('title','不明')}' の動画IDが取得できませんでした。")
+                    continue
+
                 song_info = {
                     'title': entry.get('title', '不明なタイトル'),
                     'thumbnail': entry.get('thumbnail'),
-                    'webpage_url': entry.get('webpage_url') or entry.get('url') or url_field,
+                    'webpage_url': webpage,
                     'uploader': entry.get('uploader', '不明'),
                     'duration': entry.get('duration', 0),
                     'video_id': video_id_match
@@ -279,7 +387,15 @@ def add_song():
             # 再生中でも次曲プリダウンロード
             pre_download_next_song()
 
+        if not added_items:
+            # 追加できなかった場合は詳細を返す
+            detail = "; ".join(errors) if errors else "動画を追加できませんでした。"
+            return jsonify({"error": "曲の追加に失敗しました。", "detail": detail}), 400
+
         return jsonify({"message": f"{len(added_items)} 曲を追加しました。", "added_songs": [s['title'] for s in added_items]})
+    except yt_dlp.utils.DownloadError as e:
+        print(f"Add song yt-dlp error: {e}")
+        return jsonify({"error": "曲の追加中にyt-dlpエラーが発生しました。", "detail": str(e)}), 500
     except Exception as e:
         print(f"Add song error: {e}")
         return jsonify({"error": "曲の追加に失敗しました。", "detail": str(e)}), 500
@@ -434,6 +550,139 @@ def set_sfx_volume():
     volume = float(request.json.get('volume', 1.0))
     if 0.0 <= volume <= 2.0: bot_state["sfx_volume"] = volume; return jsonify({"message": f"SFX Volume set to {volume}"})
     return jsonify({"error": "Volume must be between 0.0 and 2.0"}), 400
+
+# 設定: 自動変換を行うチャンネルID（複数可）。環境変数 ROMAJI_CHANNEL_IDS にカンマ区切りで設定するか、直接IDをここに追加。
+ROMAJI_CHANNEL_IDS = [int(x) for x in os.getenv('ROMAJI_CHANNEL_IDS', '').split(',') if x.strip().isdigit()]
+# 例: ROMAJI_CHANNEL_IDS = [1263086389935865857]
+
+def is_mostly_romaji(text, threshold=0.9):
+    """文字列がローマ字（ASCII英字と空白・記号）で構成されている割合を判定する簡易関数"""
+    if not text: return False
+    total = len(text)
+    if total == 0: return False
+    romaji_chars = 0
+    for ch in text:
+        if ch.isascii() and (ch.isalpha() or ch.isspace() or ch in "'-.,?/"):
+            romaji_chars += 1
+    return (romaji_chars / total) >= threshold
+
+# とりあえず簡易マッピング: よくある固有名詞や外来語はカタカナにする
+SIMPLE_NAME_MAP = {
+    'doraemon': 'ドラえもん', 'pikachu': 'ピカチュウ', 'naruto': 'ナルト', 'onepiece': 'ワンピース'
+}
+
+# ローマ字をひらがなに変換する簡易ロジック
+# 完全な変換は難しいため、ここでは基本的なヘボン式ローマ字→ひらがな（簡易）を実装
+ROMAJI_TO_HIRA = {
+    'kya':'きゃ','kyu':'きゅ','kyo':'きょ','sha':'しゃ','shu':'しゅ','sho':'しょ',
+    'cha':'ちゃ','chu':'ちゅ','cho':'ちょ','nya':'にゃ','nyu':'にゅ','nyo':'にょ',
+    'a':'あ','i':'い','u':'う','e':'え','o':'お',
+    'ka':'か','ki':'き','ku':'く','ke':'け','ko':'こ',
+    'sa':'さ','shi':'し','su':'す','se':'せ','so':'そ',
+    'ta':'た','chi':'ち','tsu':'つ','te':'て','to':'と',
+    'na':'な','ni':'に','nu':'ぬ','ne':'ね','no':'の',
+    'ha':'は','hi':'ひ','fu':'ふ','he':'へ','ho':'ほ',
+    'ma':'ま','mi':'み','mu':'む','me':'め','mo':'も',
+    'ya':'や','yu':'ゆ','yo':'よ',
+    'ra':'ら','ri':'り','ru':'る','re':'れ','ro':'ろ',
+    'wa':'わ','wo':'を','n':'ん',
+    'ga':'が','gi':'ぎ','gu':'ぐ','ge':'げ','go':'ご',
+    'za':'ざ','ji':'じ','zu':'ず','ze':'ぜ','zo':'ぞ',
+    'da':'だ','de':'で','do':'ど','ba':'ば','bi':'び','bu':'ぶ','be':'べ','bo':'ぼ',
+    'pa':'ぱ','pi':'ぴ','pu':'ぷ','pe':'ぺ','po':'ぽ',
+    'vu':'ヴ',
+    # y-row combined sounds
+    'kya':'きゃ','kyu':'きゅ','kyo':'きょ',
+    'gya':'ぎゃ','gyu':'ぎゅ','gyo':'ぎょ',
+    'sha':'しゃ','shu':'しゅ','sho':'しょ',
+    'ja':'じゃ','ju':'じゅ','jo':'じょ','jya':'じゃ','jyu':'じゅ','jyo':'じょ',
+    'bya':'びゃ','byu':'びゅ','byo':'びょ',
+    'pya':'ぴゃ','pyu':'ぴゅ','pyo':'ぴょ',
+    'mya':'みゃ','myu':'みゅ','myo':'みょ',
+    'hya':'ひゃ','hyu':'ひゅ','hyo':'ひょ',
+    'rya':'りゃ','ryu':'りゅ','ryo':'りょ',
+    'sya':'しゃ','syu':'しゅ','syo':'しょ',
+    'cha':'ちゃ','chu':'ちゅ','cho':'ちょ',
+}
+import re
+
+ROMAJI_TOKEN_RE = re.compile(r"[a-zA-Z]+|[^a-zA-Z]+" )
+
+def romaji_to_japanese(text):
+    """簡易ローマ字→日本語変換: 単語単位でSIMPLE_NAME_MAPを優先し、残りをひらがなにする"""
+    if not text: return ''
+    tokens = ROMAJI_TOKEN_RE.findall(text)
+    out_tokens = []
+    for t in tokens:
+        if re.fullmatch(r'[A-Za-z]+', t):
+            key = t.lower()
+            # 固有名詞やよくある外来語をマップ
+            if key in SIMPLE_NAME_MAP:
+                out_tokens.append(SIMPLE_NAME_MAP[key])
+                continue
+            # 単語を分割して変換（簡易）
+            hira = _romaji_word_to_hiragana(key)
+            out_tokens.append(hira)
+        else:
+            out_tokens.append(t)
+    # 空白を全角スペースにして読みやすく
+    return ''.join(out_tokens).replace(' ', '　')
+
+
+def _romaji_word_to_hiragana(word):
+    # greedy マッチングで3文字→2文字→1文字 の順で長いルールを優先
+    i = 0; n = len(word); res = ''
+    while i < n:
+        # 促音（っ）の処理: 同音子音の連続
+        if i+1 < n and word[i] == word[i+1] and word[i] not in 'aeiou':
+            res += 'っ'; i += 1; continue
+        # 3文字
+        if i+3 <= n and word[i:i+3] in ROMAJI_TO_HIRA:
+            res += ROMAJI_TO_HIRA[word[i:i+3]]; i += 3; continue
+        # 2文字
+        if i+2 <= n and word[i:i+2] in ROMAJI_TO_HIRA:
+            res += ROMAJI_TO_HIRA[word[i:i+2]]; i += 2; continue
+        # 1文字
+        if word[i:i+1] in ROMAJI_TO_HIRA:
+            res += ROMAJI_TO_HIRA[word[i:i+1]]; i += 1; continue
+        # 数字や単語で処理できない場合はそのまま
+        res += word[i]; i += 1
+    return res
+
+# 追加: メッセージ受信で自動変換を行うハンドラ
+@bot.event
+async def on_message(message):
+    # ボットのメッセージやコマンドは無視
+    if message.author == bot.user: return
+    if message.content.startswith(BOT_PREFIX):
+        await bot.process_commands(message)
+        return
+
+    # チャンネルチェック
+    target_ids = ROMAJI_CHANNEL_IDS
+    if not target_ids:
+        # 環境変数未設定の場合、特定のIDをハードコード（ユーザーの要求チャンネル）
+        try:
+            target_ids = [1263086389935865857]
+        except Exception:
+            target_ids = []
+
+    if message.channel.id not in target_ids:
+        await bot.process_commands(message)
+        return
+
+    text = message.content.strip()
+    if not text: return
+
+    if is_mostly_romaji(text):
+        converted = romaji_to_japanese(text)
+        if converted and converted != text:
+            try:
+                await message.channel.send(f'{converted}')
+            except Exception as e:
+                print(f"Failed to send converted message: {e}")
+    # process commands regardless
+    await bot.process_commands(message)
 
 # --- Application Runner ---
 if __name__ == "__main__":
