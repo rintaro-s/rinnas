@@ -180,17 +180,26 @@ class SSHGUIClient:
         }
 
         self.style = ttk.Style()
-        try:
-            # Vista/Windows 10風のテーマを使用
-            available_themes = self.style.theme_names()
-            if 'vista' in available_themes:
-                self.style.theme_use('vista')
-            elif 'clam' in available_themes:
-                self.style.theme_use('clam')
-            else:
-                self.style.theme_use('default')
 
-            # モダンなベーススタイル
+        try:
+            # 強制的にダーク向けの安定したテーマを使用（システムや環境に依存しない）
+            # 'clam' はカスタムスタイルの安定性が高いので固定で採用
+            self.style.theme_use('clam')
+
+            # グローバルに tkinter のデフォルト色を上書きして混在を防ぐ
+            # これにより、ttk 以外の tk ウィジェット（例: メニュー、ダイアログ、tk.Text 等）にも配色が反映されやすくなる
+            self.root.option_add("*Background", self.colors['bg'])
+            self.root.option_add("*Foreground", self.colors['fg'])
+            self.root.option_add("*Button.Background", self.colors['bg_secondary'])
+            self.root.option_add("*Button.Foreground", self.colors['fg'])
+            self.root.option_add("*Entry.Background", self.colors['bg_secondary'])
+            self.root.option_add("*Entry.Foreground", self.colors['fg'])
+            self.root.option_add("*Text.Background", self.colors['code_bg'])
+            self.root.option_add("*Text.Foreground", self.colors['code_fg'])
+            self.root.option_add("*HighlightColor", self.colors['accent'])
+            self.root.configure(bg=self.colors['bg'])
+
+            # ベーススタイルの統一設定（変更点は最小限に留める）
             self.style.configure('.', 
                 background=self.colors['bg'], 
                 foreground=self.colors['fg'],
@@ -199,192 +208,54 @@ class SSHGUIClient:
             )
 
             # フレーム系
-            self.style.configure('TFrame', 
-                background=self.colors['bg'],
-                relief='flat'
-            )
-            self.style.configure('Card.TFrame', 
-                background=self.colors['bg_card'],
-                relief='flat'
-            )
+            self.style.configure('TFrame', background=self.colors['bg'], relief='flat')
+            self.style.configure('Card.TFrame', background=self.colors['bg_card'], relief='flat')
 
             # ラベル
-            self.style.configure('TLabel', 
-                background=self.colors['bg'], 
-                foreground=self.colors['fg'],
-                font=('Segoe UI', 9)
-            )
-            self.style.configure('Heading.TLabel', 
-                background=self.colors['bg'], 
-                foreground=self.colors['fg'],
-                font=('Segoe UI', 12, 'bold')
-            )
-            self.style.configure('Secondary.TLabel', 
-                background=self.colors['bg'], 
-                foreground=self.colors['fg_secondary'],
-                font=('Segoe UI', 8)
-            )
+            self.style.configure('TLabel', background=self.colors['bg'], foreground=self.colors['fg'], font=('Segoe UI', 9))
+            self.style.configure('Heading.TLabel', background=self.colors['bg'], foreground=self.colors['fg'], font=('Segoe UI', 12, 'bold'))
+            self.style.configure('Secondary.TLabel', background=self.colors['bg'], foreground=self.colors['fg_secondary'], font=('Segoe UI', 8))
 
             # ラベルフレーム
-            self.style.configure('TLabelframe', 
-                background=self.colors['bg'],
-                bordercolor=self.colors['border'],
-                darkcolor=self.colors['bg'],
-                lightcolor=self.colors['bg'],
-                borderwidth=1,
-                relief='solid'
-            )
-            self.style.configure('TLabelframe.Label', 
-                background=self.colors['bg'], 
-                foreground=self.colors['accent'],
-                font=('Segoe UI', 9, 'bold')
-            )
+            self.style.configure('TLabelframe', background=self.colors['bg'], bordercolor=self.colors['border'], borderwidth=1, relief='solid')
+            self.style.configure('TLabelframe.Label', background=self.colors['bg'], foreground=self.colors['accent'], font=('Segoe UI', 9, 'bold'))
 
-            # エントリー - モダンな入力フィールド
-            self.style.configure('TEntry', 
-                fieldbackground=self.colors['bg_secondary'],
-                foreground=self.colors['fg'],
-                bordercolor=self.colors['border'],
-                insertcolor=self.colors['accent'],
-                borderwidth=1,
-                relief='solid'
-            )
-            self.style.map('TEntry', 
-                fieldbackground=[('focus', self.colors['bg_light']),
-                               ('active', self.colors['bg_light'])],
-                bordercolor=[('focus', self.colors['accent']),
-                           ('active', self.colors['accent'])]
-            )
+            # エントリー
+            self.style.configure('TEntry', fieldbackground=self.colors['bg_secondary'], foreground=self.colors['fg'], bordercolor=self.colors['border'], insertcolor=self.colors['accent'], borderwidth=1, relief='solid')
+            self.style.map('TEntry', fieldbackground=[('focus', self.colors['bg_light']), ('active', self.colors['bg_light'])], bordercolor=[('focus', self.colors['accent']), ('active', self.colors['accent'])])
 
-            # ボタン - フラットでモダンなデザイン
-            self.style.configure('TButton', 
-                background=self.colors['bg_secondary'],
-                foreground=self.colors['fg'],
-                bordercolor=self.colors['border'],
-                focuscolor='none',
-                borderwidth=1,
-                relief='solid',
-                padding=(12, 8),
-                font=('Segoe UI', 9)
-            )
-            self.style.map('TButton', 
-                background=[('active', self.colors['bg_light']),
-                          ('pressed', self.colors['accent_dark'])],
-                foreground=[('active', self.colors['fg']),
-                          ('pressed', '#ffffff')],
-                bordercolor=[('active', self.colors['accent']),
-                           ('pressed', self.colors['accent_dark'])]
-            )
+            # ボタン
+            self.style.configure('TButton', background=self.colors['bg_secondary'], foreground=self.colors['fg'], bordercolor=self.colors['border'], focuscolor='none', borderwidth=1, relief='solid', padding=(8, 6), font=('Segoe UI', 9))
+            self.style.map('TButton', background=[('active', self.colors['bg_light']), ('pressed', self.colors['accent_dark'])], foreground=[('active', self.colors['fg']), ('pressed', '#ffffff')], bordercolor=[('active', self.colors['accent']), ('pressed', self.colors['accent_dark'])])
 
             # プライマリボタン
-            self.style.configure('Primary.TButton', 
-                background=self.colors['accent'],
-                foreground='#ffffff',
-                bordercolor=self.colors['accent'],
-                focuscolor='none',
-                borderwidth=1,
-                relief='solid',
-                padding=(12, 8),
-                font=('Segoe UI', 9, 'bold')
-            )
-            self.style.map('Primary.TButton', 
-                background=[('active', self.colors['accent_light']),
-                          ('pressed', self.colors['accent_dark'])],
-                bordercolor=[('active', self.colors['accent_light']),
-                           ('pressed', self.colors['accent_dark'])]
-            )
+            self.style.configure('Primary.TButton', background=self.colors['accent'], foreground='#ffffff', bordercolor=self.colors['accent'], focuscolor='none', borderwidth=1, relief='solid', padding=(12, 8), font=('Segoe UI', 9, 'bold'))
+            self.style.map('Primary.TButton', background=[('active', self.colors['accent_light']), ('pressed', self.colors['accent_dark'])], bordercolor=[('active', self.colors['accent_light']), ('pressed', self.colors['accent_dark'])])
 
-            # 成功ボタン
-            self.style.configure('Success.TButton', 
-                background=self.colors['success'],
-                foreground='#ffffff',
-                bordercolor=self.colors['success']
-            )
+            # Treeview
+            self.style.configure('Treeview', background=self.colors['bg_secondary'], foreground=self.colors['fg'], fieldbackground=self.colors['bg_secondary'], bordercolor=self.colors['border'], borderwidth=1, relief='solid', rowheight=24)
+            self.style.map('Treeview', background=[('selected', self.colors['accent'])], foreground=[('selected', '#ffffff')])
+            self.style.configure('Treeview.Heading', background=self.colors['bg_light'], foreground=self.colors['fg'], bordercolor=self.colors['border'], relief='solid', font=('Segoe UI', 9, 'bold'))
 
-            # 警告ボタン
-            self.style.configure('Warning.TButton', 
-                background=self.colors['warning'],
-                foreground='#ffffff',
-                bordercolor=self.colors['warning']
-            )
+            # Notebook (タブ)
+            self.style.configure('TNotebook', background=self.colors['bg'], bordercolor=self.colors['border'])
+            self.style.configure('TNotebook.Tab', background=self.colors['bg_secondary'], foreground=self.colors['fg_secondary'], padding=(12, 6), font=('Segoe UI', 9))
+            self.style.map('TNotebook.Tab', background=[('selected', self.colors['bg_light']), ('active', self.colors['bg_light'])], foreground=[('selected', self.colors['fg']), ('active', self.colors['fg'])])
 
-            # エラーボタン
-            self.style.configure('Danger.TButton', 
-                background=self.colors['error'],
-                foreground='#ffffff',
-                bordercolor=self.colors['error']
-            )
+            # チェックボックス / スクロールバー / プログレスバー 等
+            self.style.configure('TCheckbutton', background=self.colors['bg'], foreground=self.colors['fg'], font=('Segoe UI', 9))
+            self.style.configure('Vertical.TScrollbar', background=self.colors['bg_secondary'], troughcolor=self.colors['bg'], bordercolor=self.colors['border'], arrowcolor=self.colors['fg_secondary'])
 
-            # Treeview - 見やすく整理
-            self.style.configure('Treeview', 
-                background=self.colors['bg_secondary'],
-                foreground=self.colors['fg'],
-                fieldbackground=self.colors['bg_secondary'],
-                bordercolor=self.colors['border'],
-                borderwidth=1,
-                relief='solid',
-                rowheight=24
-            )
-            self.style.map('Treeview', 
-                background=[('selected', self.colors['accent'])],
-                foreground=[('selected', '#ffffff')]
-            )
-            self.style.configure('Treeview.Heading', 
-                background=self.colors['bg_light'],
-                foreground=self.colors['fg'],
-                bordercolor=self.colors['border'],
-                relief='solid',
-                font=('Segoe UI', 9, 'bold')
-            )
-
-            # Notebook - タブ形式
-            self.style.configure('TNotebook', 
-                background=self.colors['bg'],
-                bordercolor=self.colors['border'],
-                tabposition='n'
-            )
-            self.style.configure('TNotebook.Tab', 
-                background=self.colors['bg_secondary'],
-                foreground=self.colors['fg_secondary'],
-                bordercolor=self.colors['border'],
-                padding=(16, 8),
-                font=('Segoe UI', 9)
-            )
-            self.style.map('TNotebook.Tab', 
-                background=[('selected', self.colors['bg_light']),
-                          ('active', self.colors['bg_light'])],
-                foreground=[('selected', self.colors['fg']),
-                          ('active', self.colors['fg'])]
-            )
-
-            # チェックボックス
-            self.style.configure('TCheckbutton', 
-                background=self.colors['bg'],
-                foreground=self.colors['fg'],
-                focuscolor='none',
-                font=('Segoe UI', 9)
-            )
-
-            # プログレスバー
-            self.style.configure('TProgressbar', 
-                background=self.colors['accent'],
-                troughcolor=self.colors['bg_secondary'],
-                bordercolor=self.colors['border'],
-                lightcolor=self.colors['accent'],
-                darkcolor=self.colors['accent']
-            )
-
-            # スクロールバー
-            self.style.configure('Vertical.TScrollbar', 
-                background=self.colors['bg_secondary'],
-                troughcolor=self.colors['bg'],
-                bordercolor=self.colors['border'],
-                arrowcolor=self.colors['fg_secondary'],
-                darkcolor=self.colors['bg_secondary'],
-                lightcolor=self.colors['bg_light']
-            )
+            # テキスト系ウィジェット（scrolledtext等が使うtk.Text）用に色を保証
+            # 既に root.option_add で指定しているが念のため個別指定
+            try:
+                import tkinter.scrolledtext as _st
+                _st.ScrolledText.config = {'background': self.colors['code_bg'], 'foreground': self.colors['code_fg'], 'insertbackground': self.colors['accent']}
+            except Exception:
+                pass
 
         except Exception as e:
+            # 失敗してもプログラムが動くようにログ出力のみ
             print(f"Style configuration error: {e}")
     
     def animate_glow(self, widget, start_color, end_color, duration, interval, loop=False):
@@ -1025,6 +896,7 @@ Modern UI Design - より使いやすく、より美しく
         self.ai_input = scrolledtext.ScrolledText(input_frame, height=3)
         self.ai_input.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 5))
         self.ai_input.bind('<Return>', self.ai_enter_to_send)
+        
         ttk.Button(input_frame, text="送信", command=self.send_ai_prompt).pack(side=tk.RIGHT)
 
         # アクション一覧
@@ -1455,6 +1327,7 @@ Modern UI Design - より使いやすく、より美しく
         if self.ai_auto_execute_var.get():
             for i in range(len(self.ai_staged_actions)):
                 if self.ai_action_status.get(i) == 'pending':
+                   
                     self.ai_action_status[i] = 'approved'
         # 承認済みを実行
         self.execute_approved_actions()
@@ -1769,6 +1642,132 @@ Modern UI Design - より使いやすく、より美しく
             size /= 1024.0
             i += 1
         return f"{size:.1f} {units[i]}"
+    def format_permissions(self, mode): return stat.filemode(mode)
+
+    def show_context_menu(self, event):
+        if not self.file_tree.identify_row(event.y): return
+        self.file_tree.selection_set(self.file_tree.identify_row(event.y))
+        menu = tk.Menu(self.root, tearoff=0, background=self.colors['bg_secondary'], foreground=self.colors['fg'], activebackground=self.colors['accent_dark'])
+        menu.add_command(label="開く/移動", command=self.on_file_double_click)
+        menu.add_command(label="ダウンロード", command=self.download_files)
+        menu.add_separator(background=self.colors['bg_light'])
+        menu.add_command(label="コピー", command=self.copy_files)
+        menu.add_command(label="貼り付け", command=self.paste_files, state=tk.NORMAL if self.clipboard_content else tk.DISABLED)
+        menu.add_separator(background=self.colors['bg_light'])
+        menu.add_command(label="削除", command=self.delete_files)
+        menu.tk_popup(event.x_root, event.y_root)
+
+    def download_files(self):
+        if not self.connected or not self.selected_files: return
+        local_dir = filedialog.askdirectory(title="保存先を選択")
+        if not local_dir: return
+        for f in self.selected_files:
+             threading.Thread(target=self.sftp_client.get, args=(os.path.join(self.current_path, f), os.path.join(local_dir, f))).start()
+        self.log_message(f"{len(self.selected_files)}個のファイルをダウンロード開始", "success")
+
+    def copy_files(self): self.clipboard_content = {'op': 'copy', 'src': self.current_path, 'files': self.selected_files}; self.log_message("コピーしました", "info")
+    def paste_files(self):
+        if not self.clipboard_content: return
+        for f in self.clipboard_content['files']: self.execute_ssh_command(f"cp -r '{os.path.join(self.clipboard_content['src'], f)}' '{self.current_path}'")
+        self.refresh_file_list()
+    def delete_files(self):
+        if not self.selected_files or not messagebox.askyesno("削除確認", f"'{', '.join(self.selected_files)}' を完全に削除しますか？"): return
+        for f in self.selected_files: self.execute_ssh_command(f"rm -rf '{os.path.join(self.current_path, f)}'")
+        self.refresh_file_list()
+
+    def insert_template_command(self, command_text):
+        self.command_entry.delete(0, tk.END)
+        self.command_entry.insert(0, command_text)
+
+    def open_command_generator(self):
+        gen_win = tk.Toplevel(self.root)
+        gen_win.title("コマンド生成")
+        gen_win.geometry("550x400")
+        gen_win.configure(bg=self.colors['bg'])
+        notebook = ttk.Notebook(gen_win)
+        notebook.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+        self.create_gen_tab(notebook, "find", [("検索パス:", ".", 40), ("ファイル名パターン:", "*", 40), ("タイプ:", "a", {"All": "a", "File": "f", "Dir": "d"})])
+        self.create_gen_tab(notebook, "grep", [("検索パターン:", "", 40), ("検索パス/ファイル:", ".", 40), ("オプション:", [], {"再帰(-r)": "-r", "無視(-i)": "-i", "行番号(-n)": "-n"})])
+        self.create_gen_tab(notebook, "tar", [("操作:", "c", {"作成(c)": "c", "展開(x)": "x"}), ("アーカイブ名:", "archive.tar.gz", 40), ("対象:", ".", 40), ("オプション:", ["z", "v"], {"gzip(z)": "z", "詳細(v)": "v"})])
+        self.create_gen_tab(notebook, "chmod", [("対象パス:", "", 40), ("権限(数字):", "755", 10), ("再帰的(-R):", False, {})])
+        def generate_command():
+            tab_text = notebook.tab(notebook.select(), "text")
+            widgets = notebook.nametowidget(notebook.select()).widgets
+            cmd = ""
+            if tab_text == "find":
+                path, name, ftype = [w.get() for w in widgets.values() if isinstance(w, (ttk.Entry, tk.StringVar))]
+                type_opt = {"f": "-type f", "d": "-type d"}.get(ftype, "")
+                cmd = f"find {path} -name '{name}' {type_opt}".strip()
+            elif tab_text == "grep":
+                pattern, path = [w.get() for w in widgets.values() if isinstance(w, ttk.Entry)]
+                opt_map = {"再帰(-r)": "-r", "無視(-i)": "-i", "行番号(-n)": "-n"}
+                opt_str = " ".join([opt_map[key] for key, var in zip(opt_map, widgets.values()) if isinstance(var, tk.BooleanVar) and var.get()])
+                cmd = f"grep {opt_str} '{pattern}' {path}".strip()
+            self.insert_template_command(cmd)
+            gen_win.destroy()
+        ttk.Button(gen_win, text="生成して挿入", command=generate_command).pack(pady=10)
+
+    def create_gen_tab(self, notebook, name, fields):
+        frame = ttk.Frame(notebook)
+        notebook.add(frame, text=name)
+        frame.widgets = {}
+        for i, (label, default, options) in enumerate(fields):
+            ttk.Label(frame, text=label).grid(row=i, column=0, sticky=tk.W, padx=5, pady=5)
+            if isinstance(options, dict):
+                if isinstance(default, list):
+                    for j, (text, val) in enumerate(options.items()):
+                        var = tk.BooleanVar(value=(val in default))
+                        ttk.Checkbutton(frame, text=text, variable=var).grid(row=i, column=j+1, sticky=tk.W)
+                        frame.widgets[f"{name}_{text}"] = var
+                else:
+                    var = tk.StringVar(value=default)
+                    for j, (text, val) in enumerate(options.items()):
+                        ttk.Radiobutton(frame, text=text, variable=var, value=val).grid(row=i, column=j+1, sticky=tk.W)
+                    frame.widgets[f"{name}_{label}"] = var
+            else:
+                entry = ttk.Entry(frame, width=options)
+                entry.insert(0, default)
+                entry.grid(row=i, column=1, sticky=tk.EW, padx=5, pady=5, columnspan=3)
+                frame.widgets[f"{name}_{label}"] = entry
+
+    def run_tool_command(self, cmd):
+        self.insert_template_command(cmd)
+        self.execute_command()
+        self.bottom_notebook.select(0)
+
+    def kill_process(self):
+        pid = self.pid_entry.get().strip()
+        if pid and pid.isdigit(): self.run_tool_command(f"kill -9 {pid}")
+        else: messagebox.showerror("エラー", "有効なPIDを入力してください。")
+
+    def ping_host(self):
+        host = self.ping_entry.get().strip()
+        if host: self.run_tool_command(f"ping -c 4 {host}")
+        else: messagebox.showerror("エラー", "ホスト名またはIPアドレスを入力してください。")
+
+    def tail_log(self):
+        log_path = self.log_path_entry.get().strip()
+        if log_path: self.run_tool_command(f"tail -f {log_path}")
+        else: messagebox.showerror("エラー", "ログファイルのパスを入力してください。")
+
+    def update_safety_settings(self):
+        paths = [p.strip() for p in self.protected_paths_entry.get().split(',') if p.strip()]
+        self.safety_settings['protected_paths'] = paths
+        self.log_message("安全設定を更新しました。", "success")
+
+def main():
+    root = tk.Tk() if not USING_TTKB else ttk.Window(themename="cyborg")
+    app = SSHGUIClient(root)
+    def on_closing():
+        if app.connected:
+            app.disconnect_ssh()
+        root.destroy()
+    root.protocol('WM_DELETE_WINDOW', on_closing)
+    app.log_message('SSH GUI Client Ultimate 起動完了', 'success')
+    root.mainloop()
+
+if __name__ == '__main__':
+    main()
     def format_permissions(self, mode): return stat.filemode(mode)
 
     def show_context_menu(self, event):

@@ -39,11 +39,11 @@ async def call_lm_studio(messages, image_data=None):
         
         payload = {
             "messages": messages,  # そのメッセージのみ送信
-            "max_tokens": 1000,
+            "max_tokens": 4000,
             "temperature": 0.7
         }
         
-        response = requests.post(LM_STUDIO_URL, json=payload, timeout=30)
+        response = requests.post(LM_STUDIO_URL, json=payload, timeout=60)
         response.raise_for_status()
         
         result = response.json()

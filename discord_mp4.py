@@ -74,21 +74,63 @@ def upload_page():
     '''
 
 async def compress_video(file_path, user):
+    """
+    CPU (libx264) を使って互換性重視で圧縮する。
+    - まずビットレートを下げて試す
+    - それでも10MB以下にならない場合は解像度を下げて再試行する
+    互換性向上のために以下を指定:
+    - libx264
+    - -pix_fmt yuv420p
+    - -movflags +faststart
+    - audio: aac 128k
+    """
     base = file_path.rsplit('.', 1)[0]
-    for i, br in enumerate(GPU_BITRATES, start=1):
-        compressed_path = f"{base}_compressed_cpu_{br}.mp4"
-        # GPU: -c:v hevc_nvenc → CPU: -c:v libx265
-        cmd = f'ffmpeg -y -i "{file_path}" -c:v libx265 -preset medium -b:v {br} -c:a aac "{compressed_path}"'
-        os.system(cmd)
-        if os.path.exists(compressed_path):
-            size = os.path.getsize(compressed_path)
-            if size <= 10 * 1024 * 1024:
-                return compressed_path
+    # H.264向けのビットレート（上から順に試す）
+    bitrates = ["5M", "3M", "1M", "700k", "500k", "300k", "150k"]
+    # 解像度を下げるフォールバック（幅: 高さは -2 でアスペクト比維持）
+    scales = [None, "1280:-2", "854:-2", "640:-2"]
+
+    phase = 0
+    for scale in scales:
+        for br in bitrates:
+            phase += 1
+            # ファイル名に分かりやすくスケール・ビットレートを付加
+            scale_suffix = f"_{scale.split(':')[0]}p" if scale else ""
+            compressed_path = f"{base}_compressed_cpu_{br}{scale_suffix}.mp4"
+
+            # ffmpeg コマンドを組み立てる（互換性重視）
+            cmd = f'ffmpeg -y -i "{file_path}" '
+            if scale:
+                cmd += f'-vf "scale={scale}" '
+            cmd += (
+                f'-c:v libx264 -preset medium -profile:v high -pix_fmt yuv420p '
+                f'-b:v {br} -c:a aac -b:a 128k -movflags +faststart "{compressed_path}"'
+            )
+
+            await user.send(f"圧縮フェーズ{phase}開始: ビットレート={br}{', 解像度=' + scale if scale else ''}")
+            try:
+                # shell=True を使ってコマンド文字列を流す（Windows 環境を想定）
+                subprocess.run(cmd, shell=True, check=False, capture_output=True, text=True)
+            except Exception as e:
+                await user.send(f"圧縮中に例外が発生しました: {e}")
+                continue
+
+            if os.path.exists(compressed_path):
+                size = os.path.getsize(compressed_path)
+                if size <= 10 * 1024 * 1024:
+                    await user.send(f"圧縮成功: {size} bytes (フェーズ{phase})")
+                    return compressed_path
+                else:
+                    await user.send(f"フェーズ{phase}の結果: {size} bytes でまだ大きいため次を試します。")
+                    try:
+                        os.remove(compressed_path)
+                    except:
+                        pass
             else:
-                await user.send(f"容量がまだ大きいです。フェーズ{i}処理中。（ビットレート {br}） 結果: {size} bytes")
-                os.remove(compressed_path)
-        else:
-            await user.send(f"フェーズ{i}処理中にエラーが発生しました。（ビットレート {br}）")
+                await user.send(f"フェーズ{phase}で圧縮ファイルが生成されませんでした。次を試します。")
+
+    # どのフェーズでも10MB以下にできなかった
+    await user.send("すべての圧縮フェーズを試しましたが、10MB以下に出来ませんでした。解像度の大幅ダウンや長さのカットを検討してください。")
     return None
 
 async def upload_to_discord(file_path, user_id, channel_id):
